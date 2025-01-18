@@ -1,0 +1,15 @@
+[package]
+name = "chess"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chess = "3.2.0"
+tokio = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.12.2", features = ["json", "stream"] }
+futures-util = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["codec"] }
+serde_json = "1.0"
+bytes = "1.5"
