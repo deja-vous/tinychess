@@ -1,33 +1,18 @@
-// engine.rs
-use chess::{
-    Board, BoardStatus, ChessMove, Color, MoveGen, Piece, Square, ALL_SQUARES
-};
+use chess::{Board, ChessMove, MoveGen, Color};
 
-fn piece_value(piece: Piece) -> i32 {
+const MATE_SCORE: i32 = 100_000;
+
+fn piece_value(piece: chess::Piece) -> i32 {
     match piece {
-        Piece::Pawn => 100,
-        Piece::Knight => 320,
-        Piece::Bishop => 330,
-        Piece::Rook => 500,
-        Piece::Queen => 900,
-        Piece::King => 20_000, // Very high so we don't lose the king 'cheaply'
+        chess::Piece::Pawn => 100,
+        chess::Piece::Knight => 320,
+        chess::Piece::Bishop => 330,
+        chess::Piece::Rook => 500,
+        chess::Piece::Queen => 900,
+        chess::Piece::King => 20_000,
     }
 }
 
-/*
-// Explanation of PST indexing:
-   - The chess crate's Square::to_index() goes from 0..=63 in row-major order:
-     Rank1 (A1..H1) => 0..7
-     Rank2 (A2..H2) => 8..15
-     ...
-     Rank8 (A8..H8) => 56..63
-
-   - We'll define PSTs from White's perspective so that
-     PST[index_of_A1..H1] is the bottom row (Rank1).
-   - For Black, we'll mirror by doing 63 - square_index.
-*/
-
-// Pawn PST (white perspective)
 static PAWN_PST: [i32; 64] = [
     // RANK 1 (A1..H1)
      0,   0,   0,   0,   0,   0,   0,   0,
@@ -147,60 +132,53 @@ static KING_PST: [i32; 64] = [
      50,  50,  30,   0,   0,  30,  50,  50,
 ];
 
-fn piece_square_value(piece: Piece, square: Square, color: Color) -> i32 {
-    // Convert square to index 0..63
+fn piece_square_value(piece: chess::Piece, square: chess::Square, color: Color) -> i32 {
     let idx = square.to_index() as usize;
-    
-    // For black, we flip the index to mirror (63 - idx)
     let table_index = match color {
         Color::White => idx,
         Color::Black => 63 - idx,
     };
 
     match piece {
-        Piece::Pawn => PAWN_PST[table_index],
-        Piece::Knight => KNIGHT_PST[table_index],
-        Piece::Bishop => BISHOP_PST[table_index],
-        Piece::Rook => ROOK_PST[table_index],
-        Piece::Queen => QUEEN_PST[table_index],
-        Piece::King => KING_PST[table_index],
+        chess::Piece::Pawn => PAWN_PST[table_index],
+        chess::Piece::Knight => KNIGHT_PST[table_index],
+        chess::Piece::Bishop => BISHOP_PST[table_index],
+        chess::Piece::Rook => ROOK_PST[table_index],
+        chess::Piece::Queen => QUEEN_PST[table_index],
+        chess::Piece::King => KING_PST[table_index],
     }
 }
 
 fn evaluate_board(board: &Board) -> i32 {
     let mut score = 0;
-
-    for square in ALL_SQUARES {
-        if let Some(piece) = board.piece_on(square) {
-            let color_on_square = board.color_on(square).unwrap();
-
-            // Add (for white) or subtract (for black)
-            let piece_score = piece_value(piece) + piece_square_value(piece, square, color_on_square);
-            if color_on_square == Color::White {
+    for sq in chess::ALL_SQUARES {
+        if let Some(piece) = board.piece_on(sq) {
+            let color_on_sq = board.color_on(sq).unwrap();
+            let piece_score = piece_value(piece) + piece_square_value(piece, sq, color_on_sq);
+            if color_on_sq == Color::White {
                 score += piece_score;
             } else {
                 score -= piece_score;
             }
         }
     }
-
     score
 }
 
+/// Standard negamax search with alpha-beta pruning
 fn negamax(board: &Board, depth: u32, mut alpha: i32, beta: i32, color: i32) -> i32 {
     match board.status() {
-        BoardStatus::Ongoing => {
+        chess::BoardStatus::Ongoing => {
             if depth == 0 {
                 return color * evaluate_board(board);
             }
         }
-        BoardStatus::Checkmate => {
-            // Side to move has been checkmated => big negative
-            return -10_000;
+        chess::BoardStatus::Checkmate => {
+            // The side to move is checkmated => big negative
+            return -MATE_SCORE;
         }
-        BoardStatus::Stalemate => {
-            // A draw
-            return 0;
+        chess::BoardStatus::Stalemate => {
+            return 0; // Draw
         }
     }
 
@@ -209,6 +187,7 @@ fn negamax(board: &Board, depth: u32, mut alpha: i32, beta: i32, color: i32) -> 
 
     for mv in MoveGen::new_legal(board) {
         let new_board = board.make_move_new(mv);
+        // Negamax recursion
         let value = -negamax(&new_board, depth - 1, -beta, -current_alpha, -color);
 
         if value > best_value {
@@ -225,30 +204,56 @@ fn negamax(board: &Board, depth: u32, mut alpha: i32, beta: i32, color: i32) -> 
     best_value
 }
 
-pub fn best_move(board: &Board, depth: u32) -> Option<ChessMove> {
+/// A simple function that runs negamax at a given depth and returns the best move.
+fn best_move_at_depth(board: &Board, depth: u32) -> Option<(i32, ChessMove)> {
     let color = if board.side_to_move() == Color::White { 1 } else { -1 };
 
-    let mut best_mv = None;
     let mut best_eval = i32::MIN;
-    let mut alpha = i32::MIN + 1; //add 1 to  avoid overflow
-    let beta = i32::MAX - 1;      //subtract 1  avoid overflow
+    let mut best_mv = None;
+
+    // Use alpha-beta bounds
+    let mut alpha = i32::MIN + 1; // +1 to avoid overflow
+    let beta = i32::MAX - 1;      // -1 to avoid overflow
 
     for mv in MoveGen::new_legal(board) {
         let new_board = board.make_move_new(mv);
 
+        // Negamax call with "depth-1" because we're using one ply already for this move
         let value = -negamax(&new_board, depth - 1, -beta, -alpha, -color);
+
         if value > best_eval {
             best_eval = value;
             best_mv = Some(mv);
         }
-
         if value > alpha {
             alpha = value;
         }
         if alpha >= beta {
+            // alpha-beta cutoff
             break;
         }
     }
 
-    best_mv
+    best_mv.map(|mv| (best_eval, mv))
+}
+
+/// **Iterative Deepening** to find the best move up to `max_depth`.
+///
+/// We repeatedly call `best_move_at_depth` from `1..=max_depth`.
+/// The final iteration's result is our best move at the full depth.
+pub fn best_move_iterative(board: &Board, max_depth: u32) -> Option<ChessMove> {
+    let mut best_eval_overall = i32::MIN;
+    let mut best_move_overall = None;
+
+    for depth in 1..=max_depth {
+        // Attempt a full search at this depth
+        if let Some((score, mv)) = best_move_at_depth(board, depth) {
+            best_eval_overall = score;
+            best_move_overall = Some(mv);
+
+            
+        }
+    }
+
+    best_move_overall
 }

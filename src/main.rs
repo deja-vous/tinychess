@@ -1,9 +1,9 @@
-// lichess.rs
+
 //interfacing best moves to lichess bot, ignore and create your own GUI if you dont want to use lichess
 mod engine;
-
+use std::time::Duration;
 use chess::{Board, BoardStatus, ChessMove, Color, MoveGen, Piece, Square};
-use engine::best_move;
+use engine::best_move_iterative;
 use futures_util::TryStreamExt;
 use reqwest::{header::USER_AGENT, Client};
 use serde::Deserialize;
@@ -14,6 +14,7 @@ use tokio_util::{
     codec::{FramedRead, LinesCodec, LinesCodecError},
     io::StreamReader,
 };
+
 
 // Update these structs to parse color info from Lichess
 #[derive(Debug, Deserialize)]
@@ -73,7 +74,7 @@ struct GameTracker {
 }
 
 // Replace with your actual bot's username on Lichess:
-const MY_BOT_USERNAME: &str = "";
+const MY_BOT_USERNAME: &str = "munguscarless-bot";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -218,28 +219,27 @@ async fn handle_game(
     Ok(())
 }
 
-// Updated to accept &mut GameTracker (includes board and color)
+
 async fn try_play_move(
     client: &Client,
     token: &str,
     tracker: &mut GameTracker,
 ) -> Result<(), Box<dyn Error>> {
-    // Only attempt a move if the game is ongoing.
-    // We already checked side_to_move() == my_color in handle_game,
-    // so typically we can just attempt the move here.
     if tracker.board.status() == BoardStatus::Ongoing {
-        if let Some(chosen_move) = best_move(&tracker.board, 4) {
+        if let Some(chosen_move) = best_move_iterative(&tracker.board, 4) {
             let uci = format_move_as_uci(chosen_move);
             let url = format!(
                 "https://lichess.org/api/bot/game/{}/move/{}",
                 tracker.game_id, uci
             );
 
+            // ⭐ Add delay here to prevent rate limiting ⭐
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
             println!("Playing move {uci} for game {}", tracker.game_id);
             let resp = client.post(url).bearer_auth(token).send().await?;
 
             if resp.status().is_success() {
-                // Update local board after a successful move
                 tracker.board = tracker.board.make_move_new(chosen_move);
             } else {
                 eprintln!(
