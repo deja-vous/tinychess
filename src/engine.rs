@@ -165,7 +165,28 @@ fn evaluate_board(board: &Board) -> i32 {
     score
 }
 
-/// Standard negamax search with alpha-beta pruning
+/// Generate all legal moves, ordered so that captures come first,
+/// sorted by MVV-LVA (Most Valuable Victim - Least Valuable Attacker).
+fn generate_ordered_moves(board: &Board) -> Vec<ChessMove> {
+    let mut moves: Vec<ChessMove> = MoveGen::new_legal(board).collect();
+
+    moves.sort_by_key(|mv| {
+        // If the move is a capture, let's compute MVV-LVA
+        if let Some(victim) = board.piece_on(mv.get_dest()) {
+            let attacker = board.piece_on(mv.get_source()).unwrap();
+            let score = piece_value(victim) - piece_value(attacker);
+            
+            -(score)
+        } else {
+            // Non-captures go last; use a very large negative so they come after any capture
+            i32::MIN
+        }
+    });
+
+    moves
+}
+
+
 fn negamax(board: &Board, depth: u32, mut alpha: i32, beta: i32, color: i32) -> i32 {
     match board.status() {
         chess::BoardStatus::Ongoing => {
@@ -174,18 +195,19 @@ fn negamax(board: &Board, depth: u32, mut alpha: i32, beta: i32, color: i32) -> 
             }
         }
         chess::BoardStatus::Checkmate => {
-            // The side to move is checkmated => big negative
+           
             return -MATE_SCORE;
         }
         chess::BoardStatus::Stalemate => {
-            return 0; // Draw
+            return 0; 
         }
     }
 
     let mut best_value = i32::MIN;
     let mut current_alpha = alpha;
 
-    for mv in MoveGen::new_legal(board) {
+    // Use ordered moves for searching
+    for mv in generate_ordered_moves(board) {
         let new_board = board.make_move_new(mv);
         // Negamax recursion
         let value = -negamax(&new_board, depth - 1, -beta, -current_alpha, -color);
@@ -204,18 +226,19 @@ fn negamax(board: &Board, depth: u32, mut alpha: i32, beta: i32, color: i32) -> 
     best_value
 }
 
-/// A simple function that runs negamax at a given depth and returns the best move.
+
 fn best_move_at_depth(board: &Board, depth: u32) -> Option<(i32, ChessMove)> {
     let color = if board.side_to_move() == Color::White { 1 } else { -1 };
 
     let mut best_eval = i32::MIN;
     let mut best_mv = None;
 
-    // Use alpha-beta bounds
-    let mut alpha = i32::MIN + 1; // +1 to avoid overflow
-    let beta = i32::MAX - 1;      // -1 to avoid overflow
 
-    for mv in MoveGen::new_legal(board) {
+    let mut alpha = i32::MIN + 1; 
+    let beta = i32::MAX - 1;      
+
+    // Use ordered moves for the root
+    for mv in generate_ordered_moves(board) {
         let new_board = board.make_move_new(mv);
 
         // Negamax call with "depth-1" because we're using one ply already for this move
@@ -237,10 +260,7 @@ fn best_move_at_depth(board: &Board, depth: u32) -> Option<(i32, ChessMove)> {
     best_mv.map(|mv| (best_eval, mv))
 }
 
-/// **Iterative Deepening** to find the best move up to `max_depth`.
-///
-/// We repeatedly call `best_move_at_depth` from `1..=max_depth`.
-/// The final iteration's result is our best move at the full depth.
+
 pub fn best_move_iterative(board: &Board, max_depth: u32) -> Option<ChessMove> {
     let mut best_eval_overall = i32::MIN;
     let mut best_move_overall = None;
@@ -250,8 +270,6 @@ pub fn best_move_iterative(board: &Board, max_depth: u32) -> Option<ChessMove> {
         if let Some((score, mv)) = best_move_at_depth(board, depth) {
             best_eval_overall = score;
             best_move_overall = Some(mv);
-
-            
         }
     }
 
