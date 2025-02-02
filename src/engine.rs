@@ -1,8 +1,10 @@
+use crate::psts::{PAWN_PST, KNIGHT_PST, BISHOP_PST, ROOK_PST, QUEEN_PST, KING_PST};
 use chess::{Board, ChessMove, MoveGen, Color};
-mod psts;
-use psts::{PAWN_PST, KNIGHT_PST, BISHOP_PST, ROOK_PST, QUEEN_PST, KING_PST};
 
 const MATE_SCORE: i32 = 100_000;
+
+// A constant for delta pruning: here we use the pawn’s value as a baseline.
+const DELTA: i32 = 100;
 
 fn piece_value(piece: chess::Piece) -> i32 {
     match piece {
@@ -14,7 +16,6 @@ fn piece_value(piece: chess::Piece) -> i32 {
         chess::Piece::King   => 20_000,
     }
 }
-
 
 fn piece_square_value(piece: chess::Piece, square: chess::Square, color: Color) -> i32 {
     let idx = square.to_index() as usize;
@@ -92,7 +93,13 @@ impl GameState {
     }
 }
 
-/// QUISCENCE SEARCH using the push/pop game state.
+/// QUISCENCE SEARCH with delta pruning and standing-pat cutoff using push/pop.
+/// 
+/// The method:
+/// 1. Computes the "standing pat" (static) evaluation.
+/// 2. If the standing pat score is high enough, returns beta immediately.
+/// 3. If even the standing pat plus a delta margin is below alpha, returns alpha.
+/// 4. Otherwise, searches capture moves.
 fn quiescence(game_state: &mut GameState, mut alpha: i32, beta: i32, color: i32) -> i32 {
     let board = &game_state.board;
 
@@ -102,11 +109,17 @@ fn quiescence(game_state: &mut GameState, mut alpha: i32, beta: i32, color: i32)
         chess::BoardStatus::Stalemate => return 0,
     }
 
-    // Stand-pat evaluation.
+    // Compute the static evaluation (standing pat).
     let stand_pat = color * evaluate_board(board);
     if stand_pat >= beta {
         return beta;
     }
+
+    // Delta pruning: if even the best-case improvement is insufficient, prune.
+    if stand_pat + DELTA < alpha {
+        return alpha;
+    }
+
     if alpha < stand_pat {
         alpha = stand_pat;
     }
@@ -116,6 +129,7 @@ fn quiescence(game_state: &mut GameState, mut alpha: i32, beta: i32, color: i32)
         .filter(|mv| board.piece_on(mv.get_dest()).is_some())
         .collect();
 
+    // Order the capture moves using MVV–LVA.
     capture_moves.sort_by_key(|mv| {
         if let Some(victim) = board.piece_on(mv.get_dest()) {
             let attacker = board.piece_on(mv.get_source()).unwrap();
@@ -126,6 +140,7 @@ fn quiescence(game_state: &mut GameState, mut alpha: i32, beta: i32, color: i32)
         }
     });
 
+    // Recursively search each capture.
     for mv in capture_moves {
         game_state.push(mv);
         let score = -quiescence(game_state, -beta, -alpha, -color);

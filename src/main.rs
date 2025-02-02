@@ -1,6 +1,7 @@
 
 //interfacing best moves to lichess bot, ignore and create your own GUI if you dont want to use lichess
 mod engine;
+mod psts;
 use std::time::Duration;
 use chess::{Board, BoardStatus, ChessMove, Color, MoveGen, Piece, Square};
 use engine::best_move_iterative;
