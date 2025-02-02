@@ -1,4 +1,4 @@
-static PAWN_PST: [i32; 64] = [
+pub static PAWN_PST: [i32; 64] = [
     // RANK 1 (A1..H1)
      0,   0,   0,   0,   0,   0,   0,   0,
     // RANK 2 (A2..H2)
@@ -18,7 +18,7 @@ static PAWN_PST: [i32; 64] = [
 ];
 
 // Knight PST
-static KNIGHT_PST: [i32; 64] = [
+pub static KNIGHT_PST: [i32; 64] = [
     // RANK 1
     -50, -40, -30, -30, -30, -30, -40, -50,
     // RANK 2
@@ -38,7 +38,7 @@ static KNIGHT_PST: [i32; 64] = [
 ];
 
 // Bishop PST
-static BISHOP_PST: [i32; 64] = [
+pub static BISHOP_PST: [i32; 64] = [
     // RANK 1
     -20, -10, -10, -10, -10, -10, -10, -20,
     // RANK 2
@@ -58,7 +58,7 @@ static BISHOP_PST: [i32; 64] = [
 ];
 
 // Rook PST
-static ROOK_PST: [i32; 64] = [
+pub static ROOK_PST: [i32; 64] = [
     // RANK 1
      0,   0,   0,   5,   5,   0,   0,   0,
     // RANK 2
@@ -78,7 +78,7 @@ static ROOK_PST: [i32; 64] = [
 ];
 
 // Queen PST
-static QUEEN_PST: [i32; 64] = [
+pub static QUEEN_PST: [i32; 64] = [
     // RANK 1
     -20, -10, -10,  -5,  -5, -10, -10, -20,
     // RANK 2
@@ -98,7 +98,7 @@ static QUEEN_PST: [i32; 64] = [
 ];
 
 // King PST (middlegame-ish)
-static KING_PST: [i32; 64] = [
+pub static KING_PST: [i32; 64] = [
     // RANK 1
     -30, -40, -40, -50, -50, -40, -40, -30,
     // RANK 2
