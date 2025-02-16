@@ -1,10 +1,9 @@
-use crate::psts::{PAWN_PST, KNIGHT_PST, BISHOP_PST, ROOK_PST, QUEEN_PST, KING_PST};
-use chess::{Board, ChessMove, MoveGen, Color};
+use chess::{Board, ChessMove, MoveGen, Color, Square};
+use crate::psts::{PAWN_PST, KNIGHT_PST, BISHOP_PST, QUEEN_PST, KING_PST, ROOK_PST};
+use std::time::{Instant, Duration};
+use rayon::prelude::*;
 
 const MATE_SCORE: i32 = 100_000;
-
-// A constant for delta pruning: here we use the pawn’s value as a baseline.
-const DELTA: i32 = 100;
 
 fn piece_value(piece: chess::Piece) -> i32 {
     match piece {
@@ -17,7 +16,7 @@ fn piece_value(piece: chess::Piece) -> i32 {
     }
 }
 
-fn piece_square_value(piece: chess::Piece, square: chess::Square, color: Color) -> i32 {
+fn piece_square_value(piece: chess::Piece, square: Square, color: Color) -> i32 {
     let idx = square.to_index() as usize;
     let table_index = match color {
         Color::White => idx,
@@ -50,102 +49,85 @@ fn evaluate_board(board: &Board) -> i32 {
     score
 }
 
-/// Generate all legal moves, ordering captures first by MVV–LVA.
+/// Generate all legal moves, but now prioritize moves that immediately deliver mate,
+/// then captures (via MVV-LVA), then quiet moves that give check.
 fn generate_ordered_moves(board: &Board) -> Vec<ChessMove> {
     let mut moves: Vec<ChessMove> = MoveGen::new_legal(board).collect();
 
     moves.sort_by_key(|mv| {
+        // Create the new board after this move.
+        let new_board = board.make_move_new(*mv);
+        // If the move delivers checkmate, give it the highest priority.
+        if new_board.status() == chess::BoardStatus::Checkmate {
+            return -1_000_000; // a very low key => highest priority when sorting in ascending order
+        }
+        // For capture moves, use MVV-LVA.
         if let Some(victim) = board.piece_on(mv.get_dest()) {
             let attacker = board.piece_on(mv.get_source()).unwrap();
-            let score = piece_value(victim) - piece_value(attacker);
-            -score // Higher scores come first.
+            -(piece_value(victim) - piece_value(attacker))
         } else {
-            i32::MIN // Non-captures go last.
+            // For quiet moves that deliver check, give them a bonus.
+            if new_board.checkers().popcnt() > 0 {
+                -10_000
+            } else {
+                0 // lowest priority among our ordering
+            }
         }
     });
 
     moves
 }
 
-/// A simple game state that supports push/pop (make/undo move).
-struct GameState {
-    board: Board,
-    history: Vec<Board>,
-}
-
-impl GameState {
-    fn new(board: Board) -> Self {
-        Self {
-            board,
-            history: Vec::new(),
-        }
+/// Quiescence search (unchanged)
+fn quiesce(
+    board: &Board,
+    mut alpha: i32,
+    beta: i32,
+    color: i32,
+    start_time: Instant,
+    time_limit: Duration,
+) -> i32 {
+    if start_time.elapsed() >= time_limit {
+        return color * evaluate_board(board);
     }
 
-    /// Push a move: store the current board on the history stack and update the board.
-    fn push(&mut self, mv: ChessMove) {
-        self.history.push(self.board);
-        self.board = self.board.make_move_new(mv);
-    }
-
-    /// Pop the last move, restoring the previous board state.
-    fn pop(&mut self) {
-        self.board = self.history.pop().expect("No board in history to pop!");
-    }
-}
-
-/// QUISCENCE SEARCH with delta pruning and standing-pat cutoff using push/pop.
-/// 
-/// The method:
-/// 1. Computes the "standing pat" (static) evaluation.
-/// 2. If the standing pat score is high enough, returns beta immediately.
-/// 3. If even the standing pat plus a delta margin is below alpha, returns alpha.
-/// 4. Otherwise, searches capture moves.
-fn quiescence(game_state: &mut GameState, mut alpha: i32, beta: i32, color: i32) -> i32 {
-    let board = &game_state.board;
-
-    match board.status() {
-        chess::BoardStatus::Ongoing => {},
-        chess::BoardStatus::Checkmate => return -MATE_SCORE,
-        chess::BoardStatus::Stalemate => return 0,
-    }
-
-    // Compute the static evaluation (standing pat).
     let stand_pat = color * evaluate_board(board);
     if stand_pat >= beta {
         return beta;
     }
-
-    // Delta pruning: if even the best-case improvement is insufficient, prune.
-    if stand_pat + DELTA < alpha {
-        return alpha;
-    }
-
-    if alpha < stand_pat {
+    if stand_pat > alpha {
         alpha = stand_pat;
     }
 
-    // Generate only capture moves.
-    let mut capture_moves: Vec<ChessMove> = MoveGen::new_legal(board)
-        .filter(|mv| board.piece_on(mv.get_dest()).is_some())
-        .collect();
+    let mut q_moves = Vec::new();
+    for mv in MoveGen::new_legal(board) {
+        if board.piece_on(mv.get_dest()).is_some() {
+            q_moves.push(mv);
+        } else {
+            let new_board = board.make_move_new(mv);
+            if new_board.checkers().popcnt() > 0 {
+                q_moves.push(mv);
+            }
+        }
+    }
 
-    // Order the capture moves using MVV–LVA.
-    capture_moves.sort_by_key(|mv| {
+    // Order the moves: mate moves should have already been prioritized in generate_ordered_moves,
+    // but here we use the same MVV-LVA and check bonus for quiet checks.
+    q_moves.sort_by_key(|mv| {
         if let Some(victim) = board.piece_on(mv.get_dest()) {
             let attacker = board.piece_on(mv.get_source()).unwrap();
-            let score = piece_value(victim) - piece_value(attacker);
-            -score
+            -(piece_value(victim) - piece_value(attacker))
         } else {
-            i32::MIN
+            -10_000
         }
     });
 
-    // Recursively search each capture.
-    for mv in capture_moves {
-        game_state.push(mv);
-        let score = -quiescence(game_state, -beta, -alpha, -color);
-        game_state.pop();
-
+    for mv in q_moves {
+        if start_time.elapsed() >= time_limit {
+            return alpha;
+        }
+        let new_board = board.make_move_new(mv);
+        let score = -quiesce(&new_board, -beta, -alpha, -color, start_time, time_limit);
         if score >= beta {
             return beta;
         }
@@ -156,27 +138,43 @@ fn quiescence(game_state: &mut GameState, mut alpha: i32, beta: i32, color: i32)
     alpha
 }
 
-/// NEGAMAX SEARCH using the push/pop mechanism.
-fn negamax(game_state: &mut GameState, depth: u32, mut alpha: i32, beta: i32, color: i32) -> i32 {
-    let board = &game_state.board;
-    match board.status() {
-        chess::BoardStatus::Ongoing => {},
-        chess::BoardStatus::Checkmate => return -MATE_SCORE,
-        chess::BoardStatus::Stalemate => return 0,
+/// Negamax with alpha-beta pruning.
+fn negamax(
+    board: &Board,
+    depth: u32,
+    mut alpha: i32,
+    beta: i32,
+    color: i32,
+    start_time: Instant,
+    time_limit: Duration,
+) -> i32 {
+    if start_time.elapsed() >= time_limit {
+        return color * evaluate_board(board);
     }
 
-    if depth == 0 {
-        return quiescence(game_state, alpha, beta, color);
+    match board.status() {
+        chess::BoardStatus::Ongoing => {
+            if depth == 0 {
+                return quiesce(board, alpha, beta, color, start_time, time_limit);
+            }
+        }
+        chess::BoardStatus::Checkmate => {
+            return -(MATE_SCORE - depth as i32);
+        }
+        chess::BoardStatus::Stalemate => {
+            return 0;
+        }
     }
 
     let mut best_value = i32::MIN;
     let mut current_alpha = alpha;
 
     for mv in generate_ordered_moves(board) {
-        game_state.push(mv);
-        let value = -negamax(game_state, depth - 1, -beta, -current_alpha, -color);
-        game_state.pop();
-
+        if start_time.elapsed() >= time_limit {
+            break;
+        }
+        let new_board = board.make_move_new(mv);
+        let value = -negamax(&new_board, depth - 1, -beta, -current_alpha, -color, start_time, time_limit);
         if value > best_value {
             best_value = value;
         }
@@ -184,52 +182,70 @@ fn negamax(game_state: &mut GameState, depth: u32, mut alpha: i32, beta: i32, co
             current_alpha = value;
         }
         if current_alpha >= beta {
-            break; // alpha-beta cutoff
+            break;
         }
     }
 
     best_value
 }
 
-/// At the root, try all moves using push/pop.
-fn best_move_at_depth(board: &Board, depth: u32) -> Option<(i32, ChessMove)> {
+/// Parallelized search for the best move at a given depth.
+///
+/// This version uses Rayon to evaluate each candidate move from the root in parallel.
+/// (Note: early exit on mate detection is not implemented here.)
+fn best_move_at_depth(
+    board: &Board,
+    depth: u32,
+    start_time: Instant,
+    time_limit: Duration,
+) -> Option<(i32, ChessMove)> {
     let color = if board.side_to_move() == Color::White { 1 } else { -1 };
 
-    let mut best_eval = i32::MIN;
-    let mut best_mv = None;
-
-    let mut alpha = i32::MIN + 1;
+    let alpha = i32::MIN + 1;
     let beta = i32::MAX - 1;
 
-    // Create a game state for push/pop.
-    let mut game_state = GameState::new(board.clone());
+    // Get the ordered moves at the root.
+    let moves = generate_ordered_moves(board);
 
-    for mv in generate_ordered_moves(&game_state.board) {
-        game_state.push(mv);
-        let value = -negamax(&mut game_state, depth - 1, -beta, -alpha, -color);
-        game_state.pop();
+    // Evaluate each move in parallel.
+    let results: Vec<(i32, ChessMove)> = moves.par_iter()
+        .filter_map(|&mv| {
+            // Check time in each thread.
+            if start_time.elapsed() >= time_limit {
+                None
+            } else {
+                let new_board = board.make_move_new(mv);
+                let value = -negamax(&new_board, depth - 1, -beta, -alpha, -color, start_time, time_limit);
+                Some((value, mv))
+            }
+        })
+        .collect();
 
-        if value > best_eval {
-            best_eval = value;
-            best_mv = Some(mv);
-        }
-        if value > alpha {
-            alpha = value;
-        }
-        if alpha >= beta {
-            break;
-        }
-    }
-
-    best_mv.map(|mv| (best_eval, mv))
+    // Choose the move with the highest score.
+    results.into_iter().max_by_key(|(score, _)| *score)
 }
 
+/// Iterative deepening with a 15-second time limit.
 pub fn best_move_iterative(board: &Board, max_depth: u32) -> Option<ChessMove> {
+    let start_time = Instant::now();
+    let time_limit = Duration::from_secs(15);
+
     let mut best_move_overall = None;
+    let mut best_eval_overall = i32::MIN;
 
     for depth in 1..=max_depth {
-        if let Some((_score, mv)) = best_move_at_depth(board, depth) {
+        if start_time.elapsed() >= time_limit {
+            break;
+        }
+        if let Some((score, mv)) = best_move_at_depth(board, depth, start_time, time_limit) {
+            best_eval_overall = score;
             best_move_overall = Some(mv);
+            // If we have found a mate sequence, no need to search deeper.
+            if score >= MATE_SCORE - depth as i32 {
+                break;
+            }
+        } else {
+            break;
         }
     }
 

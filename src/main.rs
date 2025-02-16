@@ -1,4 +1,3 @@
-
 //interfacing best moves to lichess bot, ignore and create your own GUI if you dont want to use lichess
 mod engine;
 mod psts;
@@ -15,7 +14,6 @@ use tokio_util::{
     codec::{FramedRead, LinesCodec, LinesCodecError},
     io::StreamReader,
 };
-
 
 // Update these structs to parse color info from Lichess
 #[derive(Debug, Deserialize)]
@@ -227,14 +225,14 @@ async fn try_play_move(
     tracker: &mut GameTracker,
 ) -> Result<(), Box<dyn Error>> {
     if tracker.board.status() == BoardStatus::Ongoing {
-        if let Some(chosen_move) = best_move_iterative(&tracker.board, 4) {
+        if let Some(chosen_move) = best_move_iterative(&tracker.board, 5) {
             let uci = format_move_as_uci(chosen_move);
             let url = format!(
                 "https://lichess.org/api/bot/game/{}/move/{}",
                 tracker.game_id, uci
             );
 
-            // ⭐ Add delay here to prevent rate limiting ⭐
+            //  Add delay here to prevent rate limiting 
             tokio::time::sleep(Duration::from_millis(100)).await;
 
             println!("Playing move {uci} for game {}", tracker.game_id);
