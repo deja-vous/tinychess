@@ -73,7 +73,7 @@ struct GameTracker {
 }
 
 // Replace with your actual bot's username on Lichess:
-const MY_BOT_USERNAME: &str = "munguscarless-bot";
+const MY_BOT_USERNAME: &str = "insert-your-bot-username-here";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
